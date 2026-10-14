@@ -45,11 +45,13 @@ type Status struct {
 	LastError   string      `json:"lastError,omitempty"`
 	ListSize    int         `json:"listSize"`
 	ListAge     int64       `json:"listAgeSec"`
+	// NextRotateAt is set while connected with auto-rotate enabled.
+	NextRotateAt *time.Time `json:"nextRotateAt,omitempty"`
 }
 
 // Event is what SSE subscribers receive.
 type Event struct {
-	Type string `json:"type"` // status | log | servers
+	Type string `json:"type"` // status | log | servers | setup
 	Data any    `json:"data"`
 }
 
@@ -78,6 +80,10 @@ type Engine struct {
 	loopDone  chan struct{}
 	subs      map[chan Event]struct{}
 	logs      []LogLine
+	// rotateAnchor is when auto-rotate was last switched on; the rotation
+	// clock starts from the later of this and the connection time, so
+	// enabling it on a long-lived connection doesn't rotate instantly.
+	rotateAnchor time.Time
 }
 
 func New(st *store.Store, dataDir string) *Engine {
@@ -90,8 +96,9 @@ func New(st *store.Store, dataDir string) *Engine {
 }
 
 // Start loads the server list (cache first for instant boot), begins periodic
-// refresh, and kicks off auto-connect if configured. Blocks only briefly.
-func (e *Engine) Start(ctx context.Context) {
+// refresh, and kicks off auto-connect if configured once waitReady (system
+// setup) succeeds. Blocks only briefly.
+func (e *Engine) Start(ctx context.Context, waitReady func(context.Context) error) {
 	if servers, mod, err := vpngate.LoadCache(e.dataDir); err == nil {
 		e.setServers(servers, mod)
 		e.logf("loaded %d servers from cache (%s old)", len(servers), time.Since(mod).Round(time.Minute))
@@ -101,8 +108,13 @@ func (e *Engine) Start(ctx context.Context) {
 			e.logf("server list refresh failed: %v", err)
 		}
 		if e.st.Settings().AutoConnect {
-			e.logf("auto-connect on startup enabled")
-			_ = e.AutoConnect(e.st.Settings().Countries)
+			go func() {
+				if waitReady != nil && waitReady(ctx) != nil {
+					return
+				}
+				e.logf("auto-connect on startup enabled")
+				_ = e.AutoConnect(e.st.Settings().Countries)
+			}()
 		}
 		t := time.NewTicker(30 * time.Minute)
 		defer t.Stop()
@@ -302,13 +314,64 @@ func (e *Engine) serverByID(id string) (vpngate.Server, bool) {
 	return vpngate.Server{}, false
 }
 
+// SaveSettings persists new settings, restarting the rotation clock when
+// auto-rotate is switched on.
+func (e *Engine) SaveSettings(cfg store.Settings) store.Settings {
+	was := e.st.Settings().AutoRotate
+	e.st.SetSettings(cfg)
+	saved := e.st.Settings()
+	if saved.AutoRotate && !was {
+		e.mu.Lock()
+		e.rotateAnchor = time.Now()
+		e.mu.Unlock()
+		e.logf("auto-rotate enabled: switching servers every %s", rotateInterval(saved))
+	}
+	e.pushStatus()
+	return saved
+}
+
+func rotateInterval(set store.Settings) time.Duration {
+	return time.Duration(max(set.RotateIntervalMin, store.MinRotateIntervalMin)) * time.Minute
+}
+
+// nextRotation returns when a connection that came up at connectedAt is due
+// to rotate, or false if auto-rotate is off.
+func (e *Engine) nextRotation(connectedAt time.Time, set store.Settings) (time.Time, bool) {
+	if !set.AutoRotate || connectedAt.IsZero() {
+		return time.Time{}, false
+	}
+	e.mu.Lock()
+	start := connectedAt
+	if e.rotateAnchor.After(start) {
+		start = e.rotateAnchor
+	}
+	e.mu.Unlock()
+	return start.Add(rotateInterval(set)), true
+}
+
 type attemptResult int
 
 const (
-	resFailed attemptResult = iota // never reached connected
-	resDropped                     // connected, then link died
-	resCancelled                   // ctx cancelled (user or shutdown)
+	resFailed    attemptResult = iota // never reached connected
+	resDropped                        // connected, then link died
+	resCancelled                      // ctx cancelled (user or shutdown)
+	resRotated                        // auto-rotate: left a healthy server on purpose
 )
+
+// hasRotationTarget reports whether some server other than currentKey is
+// eligible (matches the countries and isn't dead) to rotate to.
+func (e *Engine) hasRotationTarget(countries []string, currentKey string) bool {
+	for _, s := range e.Servers() {
+		if s.Key() != currentKey && s.Health != "dead" && matchCountry(s, countries) {
+			return true
+		}
+	}
+	return false
+}
+
+// recentRotationWindow keeps servers we rotated away from at the back of the
+// queue for a while, so rotation actually moves to different servers.
+const recentRotationWindow = 6 * time.Hour
 
 func (e *Engine) runLoop(ctx context.Context, m mode) {
 	// An environment problem (no openvpn, no root) would otherwise burn a
@@ -322,9 +385,10 @@ func (e *Engine) runLoop(ctx context.Context, m mode) {
 	}
 	round := 0
 	manualFirst := m.manualID
+	rotatedFrom := map[string]time.Time{}
 rounds:
 	for {
-		cands := e.buildCandidates(m, manualFirst)
+		cands := e.buildCandidates(m, manualFirst, rotatedFrom)
 		if len(cands) == 0 {
 			e.finish("no servers match the current filter — try refreshing the list or widening countries")
 			return
@@ -343,7 +407,15 @@ rounds:
 					return
 				}
 				e.logf("connection dropped — reconnecting")
-				manualFirst = "" // re-rank from scratch, don't pin the dropped server
+				m.manualID, manualFirst = "", "" // re-rank from scratch, don't pin the dropped server
+				round = 0
+				continue rounds
+			case resRotated:
+				rotatedFrom[c.Key()] = time.Now()
+				// Keep rotating within the same countries; looping means a
+				// rotation never leaves the user disconnected.
+				m.loop = true
+				m.manualID, manualFirst = "", ""
 				round = 0
 				continue rounds
 			case resFailed:
@@ -386,12 +458,12 @@ func (e *Engine) finish(msg string) {
 // Dead servers inside their cooldown window are excluded entirely; if nothing
 // else is left they are re-admitted, oldest failure first, so a fully "dead"
 // region still gets slowly re-probed.
-func (e *Engine) buildCandidates(m mode, manualFirst string) []ServerView {
+func (e *Engine) buildCandidates(m mode, manualFirst string, rotatedFrom map[string]time.Time) []ServerView {
 	set := e.st.Settings()
 	all := e.Servers() // already sorted by EffScore desc
 	cooldown := time.Duration(set.DeadCooldownMin) * time.Minute
 
-	var alive, cooling []ServerView
+	var alive, cooling, recent []ServerView
 	var pinned *ServerView
 	for _, s := range all {
 		if !matchCountry(s, m.countries) && s.ID != manualFirst {
@@ -406,16 +478,24 @@ func (e *Engine) buildCandidates(m mode, manualFirst string) []ServerView {
 			cooling = append(cooling, s)
 			continue
 		}
+		if at, ok := rotatedFrom[s.Key()]; ok && time.Since(at) < recentRotationWindow {
+			recent = append(recent, s)
+			continue
+		}
 		alive = append(alive, s)
 	}
+	if len(alive) > set.MaxAutoCandidates {
+		alive = alive[:set.MaxAutoCandidates]
+	}
+	// Servers we just rotated away from still worked: try them (oldest
+	// rotation first) before re-probing dead ones.
+	sort.Slice(recent, func(i, j int) bool { return rotatedFrom[recent[i].Key()].Before(rotatedFrom[recent[j].Key()]) })
+	alive = append(alive, recent...)
 	if len(alive) == 0 && pinned == nil {
 		sort.Slice(cooling, func(i, j int) bool {
 			return cooling[i].Stats.LastFailure.Before(cooling[j].Stats.LastFailure)
 		})
 		alive = cooling
-	}
-	if len(alive) > set.MaxAutoCandidates {
-		alive = alive[:set.MaxAutoCandidates]
 	}
 	if pinned != nil {
 		alive = append([]ServerView{*pinned}, alive...)
@@ -529,27 +609,55 @@ func (e *Engine) tryServer(ctx context.Context, c ServerView, attempt, total int
 	e.mu.Lock()
 	e.conn = conn
 	e.mu.Unlock()
+	connectedAt := time.Now()
 	e.setStatus(func(s *Status) {
 		s.State = "connected"
 		s.Message = fmt.Sprintf("connected to %s in %.1fs", c.HostName, float64(connectMs)/1000)
 		s.PublicIP = ip
-		s.ConnectedAt = time.Now()
+		s.ConnectedAt = connectedAt
 		s.LastError = ""
 		sc := e.view(c.Server, set)
 		s.Server = &sc
 	})
 	e.logf("connected to %s — public IP %s (%.1fs)", label, ip, float64(connectMs)/1000)
 
-	select {
-	case <-ctx.Done():
-		conn.Stop()
-		e.clearConn()
-		return resCancelled
-	case <-conn.Done():
-		e.clearConn()
-		e.st.RecordFailure(key) // a drop counts against stability
-		e.logf("%s: connection lost (%s)", label, conn.LastError())
-		return resDropped
+	rotateCheck := time.NewTicker(5 * time.Second)
+	defer rotateCheck.Stop()
+	var rotateHeld time.Time // rotation postponed (no alternative) until then
+	for {
+		select {
+		case <-ctx.Done():
+			conn.Stop()
+			e.clearConn()
+			return resCancelled
+		case <-conn.Done():
+			e.clearConn()
+			e.st.RecordFailure(key) // a drop counts against stability
+			e.logf("%s: connection lost (%s)", label, conn.LastError())
+			return resDropped
+		case <-rotateCheck.C:
+			set := e.st.Settings()
+			due, on := e.nextRotation(connectedAt, set)
+			if !on || time.Now().Before(due) || time.Now().Before(rotateHeld) {
+				continue
+			}
+			// Never drop a healthy tunnel unless a healthy alternative exists.
+			if !e.hasRotationTarget(m.countries, key) {
+				rotateHeld = time.Now().Add(rotateInterval(set))
+				e.logf("auto-rotate: no other healthy server available — staying on %s for another %s", label, rotateInterval(set))
+				continue
+			}
+			e.logf("auto-rotate: leaving %s after %s — switching to a new server", label, time.Since(connectedAt).Round(time.Minute))
+			e.setStatus(func(s *Status) {
+				s.State = "connecting"
+				s.Mode = "auto"
+				s.Message = "auto-rotate: switching to a new server…"
+				s.PublicIP = ""
+			})
+			conn.Stop()
+			e.clearConn()
+			return resRotated
+		}
 	}
 }
 
@@ -672,11 +780,17 @@ func (e *Engine) ToggleFavorite(id string) error {
 // ---- status & events ----
 
 func (e *Engine) Status() Status {
+	set := e.st.Settings()
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	s := e.status
 	if !e.fetchedAt.IsZero() {
 		s.ListAge = int64(time.Since(e.fetchedAt).Seconds())
+	}
+	e.mu.Unlock()
+	if s.State == "connected" {
+		if at, ok := e.nextRotation(s.ConnectedAt, set); ok {
+			s.NextRotateAt = &at
+		}
 	}
 	return s
 }
@@ -732,6 +846,9 @@ func (e *Engine) Subscribe() (<-chan Event, func()) {
 		e.mu.Unlock()
 	}
 }
+
+// Publish forwards an external event (e.g. setup progress) to subscribers.
+func (e *Engine) Publish(ev Event) { e.broadcast(ev) }
 
 func (e *Engine) broadcast(ev Event) {
 	e.mu.Lock()
