@@ -1,0 +1,91 @@
+# Push a version tag (e.g. `git tag v1.2.0 && git push origin v1.2.0`) to
+# build the Windows and Linux apps and publish them as a GitHub Release.
+# Tags with a hyphen (v1.2.0-rc1) are published as pre-releases.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Vet & test
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+          go test -race ./...
+
+      - name: Build
+        run: make dist VERSION="$TAG"
+
+      - name: Package
+        working-directory: dist
+        run: |
+          for arch in amd64 arm64; do
+            stage="stage-$arch/vpngate-client"
+            mkdir -p "$stage"
+            mv "vpngate-client-linux-$arch" "$stage/vpngate-client"
+            cp ../README.md "$stage/"
+            tar -C "stage-$arch" -czf "vpngate-client-linux-$arch.tar.gz" vpngate-client
+            rm -rf "stage-$arch"
+          done
+          sha256sum vpngate-client-* > SHA256SUMS.txt
+          ls -la
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<NOTES
+          ## Download
+
+          | Platform | File |
+          |---|---|
+          | **Windows** (64-bit) | \`vpngate-client-windows-amd64.exe\` |
+          | Windows on ARM | \`vpngate-client-windows-arm64.exe\` |
+          | **Linux** (x86-64) | \`vpngate-client-linux-amd64.tar.gz\` |
+          | Linux (ARM64) | \`vpngate-client-linux-arm64.tar.gz\` |
+
+          **Windows:** download and run the \`.exe\` — no installer needed. Accept the administrator
+          prompt; on first launch the app downloads and installs OpenVPN by itself. The app is not
+          code-signed yet, so SmartScreen may warn: choose *More info → Run anyway*.
+
+          **Linux:** extract and run \`./vpngate-client\`. The app opens in your browser and offers a
+          one-click setup that installs OpenVPN and grants it network access.
+
+          Verify downloads against \`SHA256SUMS.txt\`.
+          NOTES
+          flags=()
+          [[ "$TAG" == *-* ]] && flags+=(--prerelease)
+          gh release create "$TAG" dist/vpngate-client-* dist/SHA256SUMS.txt \
+            --title "VPN Gate Client $TAG" \
+            --notes-file notes.md \
+            --generate-notes \
+            --verify-tag \
+            "${flags[@]}"
