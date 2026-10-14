@@ -86,7 +86,7 @@ printf 'Building development backend...\n'
 (cd "$project_dir" && go build -o "$tmp_dir/vpngate-client" .)
 
 printf 'Starting API at http://%s\n' "$backend_addr"
-"$tmp_dir/vpngate-client" -listen "$backend_addr" -data "$data_dir" &
+"$tmp_dir/vpngate-client" -listen "$backend_addr" -data "$data_dir" -no-ui &
 backend_pid=$!
 
 printf 'Starting UI at http://%s:%s\n' "$frontend_host" "$frontend_port"
