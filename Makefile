@@ -1,7 +1,10 @@
-.PHONY: all deps web build go run dev dev-backend dev-frontend check-dev check-go check-node clean
+.PHONY: all deps web build go run dev dev-backend dev-frontend check-dev check-go check-node clean windows winres dist
 
 GO ?= go
 NPM ?= npm
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
+GO_WINRES ?= go run github.com/tc-hib/go-winres@v0.3.3
 
 all: build
 
@@ -13,11 +16,28 @@ deps:
 	cd web && $(NPM) ci
 
 build: web
-	$(GO) build -o vpngate-client .
+	$(GO) build -ldflags "$(LDFLAGS)" -o vpngate-client .
 
 # Rebuild only the Go side (web/dist must already exist)
 go:
-	$(GO) build -o vpngate-client .
+	$(GO) build -ldflags "$(LDFLAGS)" -o vpngate-client .
+
+# Windows resources: icon, version info and the manifest that makes Windows
+# ask for admin rights on launch (needed to create the tunnel adapter).
+winres:
+	$(GO_WINRES) make --arch amd64,arm64 --product-version "$(VERSION:v%=%)" --file-version "$(VERSION:v%=%)" || \
+		$(GO_WINRES) make --arch amd64,arm64
+
+# Cross-compile the Windows app (no console window: it opens its own UI).
+windows: winres
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS) -H windowsgui" -o dist/vpngate-client-windows-amd64.exe .
+	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS) -H windowsgui" -o dist/vpngate-client-windows-arm64.exe .
+	rm -f rsrc_windows_*.syso
+
+# Everything a release ships, in dist/ (CI runs this on tag pushes).
+dist: web windows
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o dist/vpngate-client-linux-amd64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o dist/vpngate-client-linux-arm64 .
 
 run: build
 	sudo ./vpngate-client
@@ -28,7 +48,7 @@ dev:
 	./scripts/dev.sh
 
 dev-backend: check-go
-	$(GO) run . -data .dev-data
+	$(GO) run . -data .dev-data -no-ui
 
 dev-frontend: check-node
 	@test -x web/node_modules/.bin/vite || $(MAKE) deps
@@ -46,4 +66,4 @@ check-node:
 	@command -v $(NPM) >/dev/null || { echo "error: npm is required (included with Node.js)" >&2; exit 1; }
 
 clean:
-	rm -rf vpngate-client web/dist web/node_modules
+	rm -rf vpngate-client dist web/dist web/node_modules rsrc_windows_*.syso
