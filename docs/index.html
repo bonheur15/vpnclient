@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VPN Gate Client — free VPN for Windows & Linux, zero setup</title>
+  <meta name="description" content="A free, open-source desktop client for the VPN Gate network. One click finds a working server, installs everything it needs, and can rotate to a fresh server every hour." />
+  <meta name="theme-color" content="#08090c" />
+  <meta property="og:title" content="VPN Gate Client" />
+  <meta property="og:description" content="Free VPN for Windows & Linux. One click, zero setup." />
+  <meta property="og:image" content="assets/screenshot.webp" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style type="text/tailwindcss">
+    @theme {
+      --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+      --color-ink-950: #08090c;
+      --color-ink-900: #0c0e13;
+      --color-ink-800: #13161d;
+      --color-ink-700: #1e232d;
+      --color-brand-400: #6aa6ff;
+      --color-brand-500: #4f8cff;
+      --animate-float: float 7s ease-in-out infinite;
+      --animate-rise: rise .8s cubic-bezier(.2,.8,.2,1) both;
+      @keyframes float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
+      @keyframes rise { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: none } }
+    }
+    @layer components {
+      .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition duration-200 active:scale-[.98]; }
+      .btn-primary { @apply bg-brand-500 text-white shadow-[0_10px_30px_-10px_rgb(79_140_255/0.9)] hover:bg-brand-400 hover:shadow-[0_14px_40px_-10px_rgb(79_140_255/1)]; }
+      .btn-ghost { @apply border border-white/10 bg-white/[0.03] text-zinc-200 hover:border-white/20 hover:bg-white/[0.06]; }
+      .card { @apply rounded-2xl border border-white/[0.07] bg-ink-800/70 shadow-[0_1px_0_0_rgb(255_255_255/0.04)_inset]; }
+      .eyebrow { @apply text-xs font-semibold uppercase tracking-[.16em] text-brand-400; }
+      .reveal { @apply opacity-0 translate-y-4 transition duration-700 ease-out; }
+      .reveal.in { @apply opacity-100 translate-y-0; }
+    }
+  </style>
+</head>
+<body class="bg-ink-950 font-sans text-zinc-300 antialiased selection:bg-brand-500/30">
+
+  <!-- background -->
+  <div aria-hidden="true" class="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+    <div class="absolute -top-56 left-1/2 h-[42rem] w-[70rem] -translate-x-1/2 rounded-full bg-radial from-brand-500/20 via-teal-400/5 to-transparent to-70%"></div>
+    <div class="absolute inset-0 bg-[linear-gradient(to_right,rgb(255_255_255/0.025)_1px,transparent_1px),linear-gradient(to_bottom,rgb(255_255_255/0.025)_1px,transparent_1px)] bg-[size:64px_64px] [mask-image:radial-gradient(ellipse_at_top,black_20%,transparent_70%)]"></div>
+  </div>
+
+  <!-- nav -->
+  <header class="sticky top-0 z-40 border-b border-white/[0.05] bg-ink-950/70 backdrop-blur-xl">
+    <nav class="mx-auto flex h-16 max-w-6xl items-center gap-8 px-6">
+      <a href="#" class="flex items-center gap-2.5">
+        <img src="assets/logo.svg" alt="" class="size-8 rounded-lg" />
+        <span class="font-semibold tracking-tight text-zinc-50">VPN Gate Client</span>
+      </a>
+      <div class="hidden items-center gap-6 text-sm text-zinc-400 md:flex">
+        <a href="#features" class="transition hover:text-zinc-100">Features</a>
+        <a href="#how" class="transition hover:text-zinc-100">How it works</a>
+        <a href="#rotate" class="transition hover:text-zinc-100">Auto-rotate</a>
+        <a href="#faq" class="transition hover:text-zinc-100">FAQ</a>
+      </div>
+      <div class="ml-auto flex items-center gap-3">
+        <a href="https://github.com/bonheur15/vpnclient" class="hidden items-center gap-2 text-sm text-zinc-400 transition hover:text-zinc-100 sm:flex" aria-label="GitHub repository">
+          <svg class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .5Z"/></svg>
+          GitHub
+        </a>
+        <a href="#download" class="btn btn-primary !px-4 !py-2">Download</a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <!-- hero -->
+    <section class="mx-auto max-w-6xl px-6 pt-20 pb-16 text-center sm:pt-28">
+      <a href="https://github.com/bonheur15/vpnclient/releases/latest" class="animate-rise inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-xs text-zinc-300 transition hover:border-brand-500/40">
+        <span class="size-1.5 rounded-full bg-emerald-400"></span>
+        <span data-version>Latest release</span> — now with auto-rotate
+        <span class="text-zinc-500">→</span>
+      </a>
+      <h1 class="animate-rise mx-auto mt-7 max-w-4xl text-5xl font-semibold tracking-tight text-balance text-zinc-50 [animation-delay:80ms] sm:text-6xl lg:text-7xl">
+        Free VPN.
+        <span class="bg-gradient-to-r from-brand-400 via-sky-300 to-teal-300 bg-clip-text text-transparent">Zero setup.</span>
+      </h1>
+      <p class="animate-rise mx-auto mt-6 max-w-2xl text-lg text-pretty text-zinc-400 [animation-delay:160ms]">
+        A fast desktop client for the volunteer-run <a class="text-zinc-200 underline decoration-white/20 underline-offset-4 hover:decoration-brand-400" href="https://www.vpngate.net/en/">VPN Gate</a> network.
+        One click finds a server that actually works — the app installs everything it needs by itself.
+      </p>
+      <div class="animate-rise mt-10 flex flex-col items-center justify-center gap-3 [animation-delay:240ms] sm:flex-row">
+        <a id="hero-download" href="#download" class="btn btn-primary w-full !py-3.5 text-base sm:w-auto">
+          <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
+          <span id="hero-download-label">Download free</span>
+        </a>
+        <a href="https://github.com/bonheur15/vpnclient" class="btn btn-ghost w-full !py-3.5 text-base sm:w-auto">View source</a>
+      </div>
+      <p id="hero-note" class="animate-rise mt-4 text-xs text-zinc-500 [animation-delay:300ms]">Windows 10/11 & Linux · open source · no account</p>
+
+      <!-- screenshot -->
+      <div class="animate-rise relative mx-auto mt-16 max-w-5xl [animation-delay:380ms]">
+        <div aria-hidden="true" class="absolute -inset-x-10 -top-10 -bottom-10 -z-10 rounded-[3rem] bg-gradient-to-b from-brand-500/25 via-teal-400/10 to-transparent blur-3xl"></div>
+        <div class="overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-[0_40px_120px_-30px_rgb(0_0_0/0.9)] ring-1 ring-white/5">
+          <div class="flex items-center gap-2 border-b border-white/[0.06] bg-ink-800 px-4 py-3">
+            <span class="size-3 rounded-full bg-white/10"></span>
+            <span class="size-3 rounded-full bg-white/10"></span>
+            <span class="size-3 rounded-full bg-white/10"></span>
+            <span class="mx-auto flex items-center gap-2 text-xs text-zinc-500"><img src="assets/logo.svg" alt="" class="size-3.5 rounded" /> VPN Gate Client</span>
+          </div>
+          <img src="assets/screenshot.webp" width="1360" height="860" alt="VPN Gate Client dashboard: connected to a server in Japan, live throughput chart and auto-rotate countdown" class="block w-full" />
+        </div>
+      </div>
+    </section>
+
+    <!-- stats strip -->
+    <section class="border-y border-white/[0.05] bg-white/[0.015]">
+      <div class="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-6 py-10 text-center md:grid-cols-4">
+        <div><div class="text-3xl font-semibold text-zinc-50">$0</div><div class="mt-1 text-sm text-zinc-500">Free forever, no account</div></div>
+        <div><div class="text-3xl font-semibold text-zinc-50">1 click</div><div class="mt-1 text-sm text-zinc-500">Finds a working server</div></div>
+        <div><div class="text-3xl font-semibold text-zinc-50">~7 MB</div><div class="mt-1 text-sm text-zinc-500">Single portable app</div></div>
+        <div><div class="text-3xl font-semibold text-zinc-50">100%</div><div class="mt-1 text-sm text-zinc-500">Open source</div></div>
+      </div>
+    </section>
+
+    <!-- features -->
+    <section id="features" class="mx-auto max-w-6xl scroll-mt-20 px-6 py-24">
+      <div class="reveal mx-auto max-w-2xl text-center">
+        <p class="eyebrow">Features</p>
+        <h2 class="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Everything handled for you</h2>
+        <p class="mt-4 text-zinc-400">Volunteer servers come and go. The app does the tedious part — testing, retrying, remembering — so you just press connect.</p>
+      </div>
+      <div class="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <article class="reveal card group p-6 transition hover:-translate-y-0.5 hover:border-white/15">
+          <div class="grid size-11 place-items-center rounded-xl bg-brand-500/10 text-brand-400 ring-1 ring-brand-500/20">
+            <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <h3 class="mt-5 font-semibold text-zinc-100">Smart auto-connect</h3>
+          <p class="mt-2 text-sm text-zinc-400">Walks the best-ranked servers and only declares success when traffic really flows through the tunnel.</p>
+        </article>
+        <article class="reveal card group p-6 transition hover:-translate-y-0.5 hover:border-white/15">
+          <div class="grid size-11 place-items-center rounded-xl bg-teal-400/10 text-teal-300 ring-1 ring-teal-400/20">
+            <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          </div>
+          <h3 class="mt-5 font-semibold text-zinc-100">Installs itself</h3>
+          <p class="mt-2 text-sm text-zinc-400">On Windows it downloads and installs the official, signed OpenVPN package automatically. On Linux, one click sets everything up.</p>
+        </article>
+        <article class="reveal card group p-6 transition hover:-translate-y-0.5 hover:border-white/15">
+          <div class="grid size-11 place-items-center rounded-xl bg-violet-400/10 text-violet-300 ring-1 ring-violet-400/20">
+            <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>
+          </div>
+          <h3 class="mt-5 font-semibold text-zinc-100">Hourly auto-rotate</h3>
+          <p class="mt-2 text-sm text-zinc-400">Optionally hop to a fresh server on a schedule — every 1 to 24 hours — without lifting a finger.</p>
+        </article>
+        <article class="reveal card group p-6 transition hover:-translate-y-0.5 hover:border-white/15">
+          <div class="grid size-11 place-items-center rounded-xl bg-amber-400/10 text-amber-300 ring-1 ring-amber-400/20">
+            <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+          </div>
+          <h3 class="mt-5 font-semibold text-zinc-100">Learns what works</h3>
+          <p class="mt-2 text-sm text-zinc-400">Remembers every success and failure. Servers that keep failing are benched for a while so retries never waste time.</p>
+        </article>
+        <article class="reveal card group p-6 transition hover:-translate-y-0.5 hover:border-white/15">
+          <div class="grid size-11 place-items-center rounded-xl bg-sky-400/10 text-sky-300 ring-1 ring-sky-400/20">
+            <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg>
+          </div>
+          <h3 class="mt-5 font-semibold text-zinc-100">Live dashboard</h3>
+          <p class="mt-2 text-sm text-zinc-400">Exit IP, uptime, real-time download and upload speeds, and a full activity log when you want the details.</p>
+        </article>
+        <article class="reveal card group p-6 transition hover:-translate-y-0.5 hover:border-white/15">
+          <div class="grid size-11 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/20">
+            <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3 class="mt-5 font-semibold text-zinc-100">Pick any country</h3>
+          <p class="mt-2 text-sm text-zinc-400">Choose one or more countries, favorite the servers you like, or let the app pick the fastest available.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- how it works -->
+    <section id="how" class="scroll-mt-20 border-y border-white/[0.05] bg-white/[0.015]">
+      <div class="mx-auto max-w-6xl px-6 py-24">
+        <div class="reveal mx-auto max-w-2xl text-center">
+          <p class="eyebrow">How it works</p>
+          <h2 class="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Connected in under a minute</h2>
+        </div>
+        <ol class="mt-14 grid gap-6 md:grid-cols-3">
+          <li class="reveal relative">
+            <span class="block bg-gradient-to-b from-brand-400/70 to-brand-400/0 bg-clip-text text-5xl font-semibold text-transparent">01</span>
+            <h3 class="mt-3 font-semibold text-zinc-100">Download &amp; run</h3>
+            <p class="mt-2 text-sm text-zinc-400">One file, no installer. On Windows, accept the administrator prompt — a VPN needs it to create the network tunnel.</p>
+          </li>
+          <li class="reveal relative">
+            <span class="block bg-gradient-to-b from-brand-400/70 to-brand-400/0 bg-clip-text text-5xl font-semibold text-transparent">02</span>
+            <h3 class="mt-3 font-semibold text-zinc-100">It sets itself up</h3>
+            <p class="mt-2 text-sm text-zinc-400">First launch fetches the OpenVPN engine and network driver, verifies them, and installs them — with a progress bar, not a wizard.</p>
+          </li>
+          <li class="reveal relative">
+            <span class="block bg-gradient-to-b from-brand-400/70 to-brand-400/0 bg-clip-text text-5xl font-semibold text-transparent">03</span>
+            <h3 class="mt-3 font-semibold text-zinc-100">Press connect</h3>
+            <p class="mt-2 text-sm text-zinc-400">The app tests servers until one works, then keeps you connected — reconnecting automatically if a server drops.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- auto-rotate -->
+    <section id="rotate" class="mx-auto max-w-6xl scroll-mt-20 px-6 py-24">
+      <div class="grid items-center gap-12 lg:grid-cols-2">
+        <div class="reveal">
+          <p class="eyebrow">Auto-rotate</p>
+          <h2 class="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">A fresh exit IP, on your schedule</h2>
+          <p class="mt-4 text-zinc-400">Turn on auto-rotate and the app moves you to a different healthy server in your chosen location every 1, 2, 3, 6, 12 or 24 hours. Servers you just left go to the back of the queue, so each rotation really changes your exit.</p>
+          <p class="mt-4 text-zinc-400">The shortest interval is one hour, by design: VPN Gate servers are donated by volunteers, and we'd rather not hammer them.</p>
+        </div>
+        <div class="reveal card relative overflow-hidden p-6">
+          <div aria-hidden="true" class="absolute -top-20 -right-20 size-60 rounded-full bg-brand-500/20 blur-3xl"></div>
+          <div class="relative flex items-center justify-between">
+            <div>
+              <div class="text-sm font-medium text-zinc-100">Rotate servers automatically</div>
+              <div class="mt-0.5 text-xs text-zinc-500">Switches to a different healthy server</div>
+            </div>
+            <span class="relative inline-flex h-6 w-11 items-center rounded-full bg-brand-500"><span class="inline-block size-4.5 translate-x-[22px] rounded-full bg-white"></span></span>
+          </div>
+          <div class="relative mt-5 grid grid-cols-6 gap-1.5 rounded-xl bg-ink-900 p-1 ring-1 ring-white/[0.06] text-center text-sm">
+            <span class="rounded-lg bg-brand-500 py-1.5 font-medium text-white">1h</span>
+            <span class="py-1.5 text-zinc-500">2h</span><span class="py-1.5 text-zinc-500">3h</span><span class="py-1.5 text-zinc-500">6h</span><span class="py-1.5 text-zinc-500">12h</span><span class="py-1.5 text-zinc-500">24h</span>
+          </div>
+          <div class="relative mt-5 space-y-2.5">
+            <div class="flex items-center gap-3 rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.05]">
+              <span class="grid h-6 w-8 place-items-center rounded bg-white/[0.06] text-[10px] font-bold text-zinc-400">JP</span>
+              <div class="flex-1 text-sm"><div class="text-zinc-200">public-vpn-121</div><div class="text-xs text-zinc-500">connected 1h ago</div></div>
+              <span class="text-xs text-zinc-500">rotating…</span>
+            </div>
+            <div class="flex items-center gap-3 rounded-xl bg-emerald-400/[0.06] p-3 ring-1 ring-emerald-400/20">
+              <span class="grid h-6 w-8 place-items-center rounded bg-emerald-400/15 text-[10px] font-bold text-emerald-300">JP</span>
+              <div class="flex-1 text-sm"><div class="text-zinc-100">vpn670095336</div><div class="text-xs text-emerald-300/80">next rotation in 59m</div></div>
+              <span class="size-2 rounded-full bg-emerald-400"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- download -->
+    <section id="download" class="scroll-mt-20 border-y border-white/[0.05] bg-white/[0.015]">
+      <div class="mx-auto max-w-6xl px-6 py-24">
+        <div class="reveal mx-auto max-w-2xl text-center">
+          <p class="eyebrow">Download</p>
+          <h2 class="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Get VPN Gate Client</h2>
+          <p class="mt-4 text-zinc-400"><span data-version>The latest release</span> · free and open source</p>
+        </div>
+        <div class="mx-auto mt-12 grid max-w-4xl gap-5 md:grid-cols-2">
+          <div class="reveal card flex flex-col p-7" data-os="windows">
+            <div class="flex items-center gap-3">
+              <svg class="size-8 text-sky-400" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5 10.5 4.5v7H3zM11.5 4.3 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.3z"/></svg>
+              <div>
+                <h3 class="font-semibold text-zinc-50">Windows</h3>
+                <p class="text-xs text-zinc-500">Windows 10 &amp; 11 · 64-bit</p>
+              </div>
+            </div>
+            <ul class="mt-5 flex-1 space-y-2 text-sm text-zinc-400">
+              <li class="flex gap-2"><span class="text-emerald-400">✓</span> Single <code class="text-zinc-300">.exe</code> — no installer</li>
+              <li class="flex gap-2"><span class="text-emerald-400">✓</span> Installs OpenVPN automatically on first run</li>
+              <li class="flex gap-2"><span class="text-emerald-400">✓</span> Native app window</li>
+            </ul>
+            <a href="https://github.com/bonheur15/vpnclient/releases/latest/download/vpngate-client-windows-amd64.exe" class="btn btn-primary mt-6 w-full">Download for Windows</a>
+            <a href="https://github.com/bonheur15/vpnclient/releases/latest/download/vpngate-client-windows-arm64.exe" class="mt-3 text-center text-xs text-zinc-500 hover:text-zinc-300">Windows on ARM</a>
+          </div>
+          <div class="reveal card flex flex-col p-7" data-os="linux">
+            <div class="flex items-center gap-3">
+              <svg class="size-8 text-amber-300" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c-2.2 0-3.5 1.9-3.5 4.6 0 1.4.3 2.3-.6 3.6C6.6 12 5 14 5 16.4c0 .9.2 1.6.6 2.2-.6.4-1.1 1-1.1 1.6 0 1 1.2 1.3 2.6 1.6 1.2.3 2.2.7 2.9.7.8 0 1.3-.4 1.6-.9h1c.3.5.8.9 1.6.9.7 0 1.7-.4 2.9-.7 1.4-.3 2.6-.6 2.6-1.6 0-.6-.5-1.2-1.1-1.6.4-.6.6-1.3.6-2.2 0-2.4-1.6-4.4-2.9-6.2-.9-1.3-.6-2.2-.6-3.6C15.5 3.9 14.2 2 12 2Zm-1.4 4c.4 0 .7.5.7 1.1s-.3 1.1-.7 1.1-.7-.5-.7-1.1.3-1.1.7-1.1Zm2.8 0c.4 0 .7.5.7 1.1s-.3 1.1-.7 1.1-.7-.5-.7-1.1.3-1.1.7-1.1ZM12 9c.9 0 2 .6 2 1s-1.1 1-2 1-2-.6-2-1 1.1-1 2-1Z"/></svg>
+              <div>
+                <h3 class="font-semibold text-zinc-50">Linux</h3>
+                <p class="text-xs text-zinc-500">x86-64 &amp; ARM64 · any modern distro</p>
+              </div>
+            </div>
+            <ul class="mt-5 flex-1 space-y-2 text-sm text-zinc-400">
+              <li class="flex gap-2"><span class="text-emerald-400">✓</span> Single static binary</li>
+              <li class="flex gap-2"><span class="text-emerald-400">✓</span> One-click setup via your package manager</li>
+              <li class="flex gap-2"><span class="text-emerald-400">✓</span> Runs as a service, too</li>
+            </ul>
+            <a href="https://github.com/bonheur15/vpnclient/releases/latest/download/vpngate-client-linux-amd64.tar.gz" class="btn btn-ghost mt-6 w-full">Download for Linux</a>
+            <a href="https://github.com/bonheur15/vpnclient/releases/latest/download/vpngate-client-linux-arm64.tar.gz" class="mt-3 text-center text-xs text-zinc-500 hover:text-zinc-300">Linux ARM64</a>
+          </div>
+        </div>
+        <div class="reveal mx-auto mt-8 max-w-4xl rounded-xl border border-white/[0.06] bg-ink-900/60 p-4 text-sm text-zinc-400">
+          <span class="font-medium text-zinc-200">Linux quick start:</span>
+          <code class="mt-2 block overflow-x-auto rounded-lg bg-black/40 px-3 py-2 font-mono text-xs text-zinc-300">tar xzf vpngate-client-linux-amd64.tar.gz &amp;&amp; ./vpngate-client/vpngate-client</code>
+          <p class="mt-3 text-xs text-zinc-500">The Windows app isn't code-signed yet, so SmartScreen may say "Windows protected your PC" — click <em>More info → Run anyway</em>. Every release lists SHA-256 checksums.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- faq -->
+    <section id="faq" class="mx-auto max-w-3xl scroll-mt-20 px-6 py-24">
+      <div class="reveal text-center">
+        <p class="eyebrow">FAQ</p>
+        <h2 class="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Questions</h2>
+      </div>
+      <div class="mt-12 divide-y divide-white/[0.06] rounded-2xl border border-white/[0.07] bg-ink-800/50">
+        <details class="group p-5 [&_summary::-webkit-details-marker]:hidden">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-zinc-100">Is it really free?<span class="text-zinc-500 transition group-open:rotate-45">+</span></summary>
+          <p class="mt-3 text-sm text-zinc-400">Yes. The app is open source, and it connects to <a class="text-brand-400 hover:underline" href="https://www.vpngate.net/en/">VPN Gate</a>, a free academic project of the University of Tsukuba whose servers are donated by volunteers.</p>
+        </details>
+        <details class="group p-5 [&_summary::-webkit-details-marker]:hidden">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-zinc-100">Is it private?<span class="text-zinc-500 transition group-open:rotate-45">+</span></summary>
+          <p class="mt-3 text-sm text-zinc-400">The app has no account and no tracking — it runs entirely on your computer. But VPN Gate servers are run by volunteers who can see your unencrypted traffic, and the project keeps connection logs. It's great for getting around geo-blocks and hiding your IP from websites; for sensitive work, stick to HTTPS sites.</p>
+        </details>
+        <details class="group p-5 [&_summary::-webkit-details-marker]:hidden">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-zinc-100">Why does it need administrator rights?<span class="text-zinc-500 transition group-open:rotate-45">+</span></summary>
+          <p class="mt-3 text-sm text-zinc-400">Creating a VPN tunnel means adding a network adapter and changing routes, which every operating system restricts to administrators. On Linux, the one-click setup grants the app permission to start OpenVPN only, so you aren't asked for your password every time.</p>
+        </details>
+        <details class="group p-5 [&_summary::-webkit-details-marker]:hidden">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-zinc-100">Why can't auto-rotate go faster than one hour?<span class="text-zinc-500 transition group-open:rotate-45">+</span></summary>
+          <p class="mt-3 text-sm text-zinc-400">Every rotation opens a new session on a volunteer's server. A one-hour floor keeps the load on them reasonable. You can still switch servers manually whenever you want.</p>
+        </details>
+        <details class="group p-5 [&_summary::-webkit-details-marker]:hidden">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-zinc-100">What gets installed on my computer?<span class="text-zinc-500 transition group-open:rotate-45">+</span></summary>
+          <p class="mt-3 text-sm text-zinc-400">Only the official OpenVPN Community package (with its TAP network driver) on Windows, pinned to a verified checksum — or the <code>openvpn</code> package from your distro on Linux. The app itself is a single file you can delete at any time.</p>
+        </details>
+        <details class="group p-5 [&_summary::-webkit-details-marker]:hidden">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-zinc-100">Is there a macOS version?<span class="text-zinc-500 transition group-open:rotate-45">+</span></summary>
+          <p class="mt-3 text-sm text-zinc-400">Not yet — Windows and Linux are supported today.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- cta -->
+    <section class="mx-auto max-w-6xl px-6 pb-24">
+      <div class="reveal relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-brand-500/20 via-ink-800 to-teal-400/10 px-8 py-16 text-center">
+        <img src="assets/logo.svg" alt="" class="animate-float mx-auto size-14 rounded-2xl shadow-2xl" />
+        <h2 class="mt-6 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Ready when you are</h2>
+        <p class="mx-auto mt-3 max-w-lg text-zinc-400">Download, run, connect. That's the whole setup.</p>
+        <a href="#download" class="btn btn-primary mt-8">Download free</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-white/[0.05]">
+    <div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-8 text-sm text-zinc-500 sm:flex-row">
+      <div class="flex items-center gap-2.5">
+        <img src="assets/logo.svg" alt="" class="size-6 rounded-md" />
+        VPN Gate Client
+      </div>
+      <p>Not affiliated with the University of Tsukuba or the VPN Gate project.</p>
+      <a href="https://github.com/bonheur15/vpnclient" class="hover:text-zinc-300">GitHub</a>
+    </div>
+  </footer>
+
+  <script>
+    // Point the hero button at the right download for this visitor's OS.
+    (function () {
+      var base = 'https://github.com/bonheur15/vpnclient/releases/latest/download/'
+      var ua = navigator.userAgent
+      var btn = document.getElementById('hero-download')
+      var label = document.getElementById('hero-download-label')
+      if (/Windows/i.test(ua)) {
+        btn.href = base + (/ARM64|aarch64/i.test(ua) ? 'vpngate-client-windows-arm64.exe' : 'vpngate-client-windows-amd64.exe')
+        label.textContent = 'Download for Windows'
+      } else if (/Linux/i.test(ua) && !/Android/i.test(ua)) {
+        btn.href = base + (/aarch64|arm64/i.test(ua) ? 'vpngate-client-linux-arm64.tar.gz' : 'vpngate-client-linux-amd64.tar.gz')
+        label.textContent = 'Download for Linux'
+      }
+    })()
+
+    // Show the real latest version (best effort; links work without it).
+    fetch('https://api.github.com/repos/bonheur15/vpnclient/releases/latest')
+      .then(function (r) { return r.ok ? r.json() : null })
+      .then(function (rel) {
+        if (!rel || !rel.tag_name) return
+        document.querySelectorAll('[data-version]').forEach(function (el) { el.textContent = rel.tag_name })
+      })
+      .catch(function () {})
+
+    // Fade sections in as they scroll into view.
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) } })
+    }, { threshold: 0.12 })
+    document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el) })
+  </script>
+</body>
+</html>
