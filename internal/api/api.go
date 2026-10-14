@@ -3,25 +3,44 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/url"
+	"runtime"
 	"strings"
 
 	"vpngate-client/internal/engine"
+	"vpngate-client/internal/setup"
 	"vpngate-client/internal/store"
 	"vpngate-client/internal/vpn"
 )
 
-type Server struct {
-	eng *engine.Engine
-	st  *store.Store
-	web fs.FS
+// App holds process-level details and hooks owned by main.
+type App struct {
+	Version string
+	DataDir string
+	Quit    func() // shut the whole app down
+	Show    func() // bring the UI window/browser to the front
 }
 
-func New(eng *engine.Engine, st *store.Store, web fs.FS) http.Handler {
-	s := &Server{eng: eng, st: st, web: web}
+type Server struct {
+	eng   *engine.Engine
+	st    *store.Store
+	setup *setup.Manager
+	app   App
+	web   fs.FS
+	ctx   context.Context
+}
+
+// New builds the HTTP handler. ctx outlives individual requests and bounds
+// background work (like installs) that requests kick off.
+func New(ctx context.Context, eng *engine.Engine, st *store.Store, sm *setup.Manager, app App, web fs.FS) http.Handler {
+	s := &Server{eng: eng, st: st, setup: sm, app: app, web: web, ctx: ctx}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/status", s.getStatus)
@@ -37,9 +56,67 @@ func New(eng *engine.Engine, st *store.Store, web fs.FS) http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("GET /api/logs", s.getLogs)
 	mux.HandleFunc("GET /api/preflight", s.getPreflight)
+	mux.HandleFunc("GET /api/setup", s.getSetup)
+	mux.HandleFunc("POST /api/setup/fix", s.postSetupFix)
+	mux.HandleFunc("GET /api/info", s.getInfo)
+	mux.HandleFunc("POST /api/quit", s.postQuit)
+	mux.HandleFunc("POST /api/show", s.postShow)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("/", s.static)
-	return mux
+	return sameOrigin(mux)
+}
+
+// sameOrigin keeps other websites away from the API, which has no auth (it
+// listens on localhost):
+//   - Host must be an IP literal or "localhost". This defeats DNS rebinding,
+//     where an attacker's domain re-resolves to 127.0.0.1 to read the API.
+//   - State-changing requests must not come from a foreign origin, so a page
+//     open in the browser can't POST to trigger installs, connects or quit.
+func sameOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !trustedHost(r.Host) {
+			writeErr(w, http.StatusForbidden, errors.New("unexpected Host header"))
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if origin := r.Header.Get("Origin"); origin != "" && !trustedOrigin(origin, r.Host) {
+				writeErr(w, http.StatusForbidden, errors.New("cross-origin request refused"))
+				return
+			}
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				writeErr(w, http.StatusForbidden, errors.New("cross-site request refused"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func trustedHost(hostport string) bool {
+	h := hostport
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		h = host
+	}
+	h = strings.Trim(h, "[]")
+	return h == "localhost" || net.ParseIP(h) != nil
+}
+
+// trustedOrigin accepts our own origin plus any loopback origin (the Vite
+// dev server proxies the API from another localhost port).
+func trustedOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Host == host {
+		return true
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -138,13 +215,12 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
-	var cfg store.Settings
+	cfg := s.st.Settings() // fields omitted by the client keep their values
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	s.st.SetSettings(cfg)
-	writeJSON(w, 200, s.st.Settings())
+	writeJSON(w, 200, s.eng.SaveSettings(cfg))
 }
 
 func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +234,58 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 // getPreflight tells the UI whether OpenVPN can actually be launched and
 // whether other VPN software would sabotage the tunnel.
 func (s *Server) getPreflight(w http.ResponseWriter, r *http.Request) {
-	res := map[string]any{"ok": true, "warnings": vpn.DetectConflicts()}
-	if err := vpn.Preflight(); err != nil {
+	warnings := vpn.DetectConflicts()
+	if warnings == nil {
+		warnings = []string{}
+	}
+	res := map[string]any{"ok": true, "warnings": warnings}
+	if st := s.setup.State(); !st.Ready() {
 		res["ok"] = false
-		res["error"] = err.Error()
+		res["error"] = st.Message
 	}
 	writeJSON(w, 200, res)
+}
+
+func (s *Server) getSetup(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.setup.State())
+}
+
+// postSetupFix runs the one-click fix (install / grant access). Progress is
+// streamed as "setup" events; the response returns immediately.
+func (s *Server) postSetupFix(w http.ResponseWriter, r *http.Request) {
+	if err := s.setup.Fix(s.ctx); err != nil {
+		writeErr(w, 409, err)
+		return
+	}
+	writeJSON(w, 202, map[string]bool{"ok": true})
+}
+
+func (s *Server) getInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"version":   s.app.Version,
+		"os":        runtime.GOOS,
+		"arch":      runtime.GOARCH,
+		"dataDir":   s.app.DataDir,
+		"minRotate": store.MinRotateIntervalMin,
+		"canQuit":   s.app.Quit != nil,
+	})
+}
+
+func (s *Server) postQuit(w http.ResponseWriter, r *http.Request) {
+	if s.app.Quit == nil {
+		writeErr(w, 404, errors.New("quit not supported"))
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+	go s.app.Quit()
+}
+
+// postShow is used by a second launch of the app to surface this instance.
+func (s *Server) postShow(w http.ResponseWriter, r *http.Request) {
+	if s.app.Show != nil {
+		go s.app.Show()
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 // events streams engine events as SSE. A full status snapshot is sent first.
@@ -189,7 +311,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	if !send(engine.Event{Type: "status", Data: s.eng.Status()}) {
+	if !send(engine.Event{Type: "status", Data: s.eng.Status()}) ||
+		!send(engine.Event{Type: "setup", Data: s.setup.State()}) {
 		return
 	}
 	ch, unsub := s.eng.Subscribe()
@@ -197,6 +320,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.ctx.Done(): // app shutting down: don't hold up srv.Shutdown
 			return
 		case ev := <-ch:
 			if ev.Type == "servers" {
