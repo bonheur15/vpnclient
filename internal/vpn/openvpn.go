@@ -4,6 +4,7 @@ package vpn
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,15 +13,21 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+)
+
+// Environment problems reported by Preflight. Callers (the setup manager)
+// use errors.Is to decide how to fix them.
+var (
+	ErrNotInstalled = errors.New("OpenVPN is not installed")
+	ErrNoPrivileges = errors.New("administrator rights are required to create the VPN tunnel")
 )
 
 // Options configures one connection attempt.
 type Options struct {
 	ManageDNS bool
-	Logf      func(line string)         // receives every openvpn log line
-	OnBytes   func(rx, tx uint64)       // cumulative session byte counts, ~every 2s
+	Logf      func(line string)   // receives every openvpn log line
+	OnBytes   func(rx, tx uint64) // cumulative session byte counts, ~every 2s
 }
 
 // Conn is a running OpenVPN process.
@@ -42,18 +49,13 @@ type Conn struct {
 }
 
 // Preflight checks that openvpn can actually be launched with enough
-// privileges, returning a human-readable error for the UI if not.
+// privileges. The error wraps ErrNotInstalled or ErrNoPrivileges.
 func Preflight() error {
-	if _, err := exec.LookPath("openvpn"); err != nil {
-		return fmt.Errorf("openvpn binary not found — install it (e.g. `sudo apt install openvpn`)")
+	bin, err := FindOpenVPN()
+	if err != nil {
+		return err
 	}
-	if os.Geteuid() == 0 {
-		return nil
-	}
-	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
-		return fmt.Errorf("openvpn needs root: run this app with sudo, or allow passwordless sudo for it")
-	}
-	return nil
+	return checkPrivileges(bin)
 }
 
 // Start launches openvpn with the given config text. It returns once the
@@ -62,53 +64,27 @@ func Start(configText string, o Options) (*Conn, error) {
 	if o.Logf == nil {
 		o.Logf = func(string) {}
 	}
-	if err := Preflight(); err != nil {
-		return nil, err
-	}
-
-	dir, err := os.MkdirTemp("", "vpngate-*")
+	bin, err := FindOpenVPN()
 	if err != nil {
 		return nil, err
 	}
-	cfgPath := filepath.Join(dir, "client.ovpn")
-	if err := os.WriteFile(cfgPath, []byte(configText), 0o600); err != nil {
-		os.RemoveAll(dir)
+	if err := checkPrivileges(bin); err != nil {
 		return nil, err
 	}
 
+	cleaned, dropped := sanitizeConfig(configText)
+	if len(dropped) > 0 {
+		o.Logf(fmt.Sprintf("ignoring unsupported config directives: %s", strings.Join(dropped, ", ")))
+	}
 	mgmtPort, err := freePort()
 	if err != nil {
-		os.RemoveAll(dir)
+		return nil, err
+	}
+	cmd, dir, err := prepareCommand(bin, cleaned, mgmtPort, o.ManageDNS)
+	if err != nil {
 		return nil, err
 	}
 
-	args := []string{
-		"--config", cfgPath,
-		"--management", "127.0.0.1", strconv.Itoa(mgmtPort),
-		"--verb", "3",
-		"--connect-retry-max", "1",
-		"--server-poll-timeout", "10",
-		"--resolv-retry", "2",
-		"--ping", "10",
-		"--ping-exit", "45",
-		"--mute-replay-warnings",
-		"--auth-nocache",
-		// Many VPN Gate servers still negotiate CBC ciphers; allow them
-		// alongside modern AEAD ciphers so OpenVPN 2.6+ doesn't refuse.
-		"--data-ciphers", "AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC",
-	}
-	if o.ManageDNS {
-		if up, down, ok := dnsScripts(); ok {
-			args = append(args, "--script-security", "2", "--up", up, "--down", down)
-		}
-	}
-
-	var cmd *exec.Cmd
-	if os.Geteuid() == 0 {
-		cmd = exec.Command("openvpn", args...)
-	} else {
-		cmd = exec.Command("sudo", append([]string{"-n", "openvpn"}, args...)...)
-	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		os.RemoveAll(dir)
@@ -119,6 +95,7 @@ func Start(configText string, o Options) (*Conn, error) {
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("start openvpn: %w", err)
 	}
+	afterStart(cmd)
 
 	c := &Conn{
 		cmd:       cmd,
@@ -136,10 +113,56 @@ func Start(configText string, o Options) (*Conn, error) {
 		c.exitErr = err
 		c.mu.Unlock()
 		c.closeMgmt()
-		os.RemoveAll(dir)
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
 		close(c.done)
 	}()
 	return c, nil
+}
+
+// writeConfig stores a (sanitized) config in a fresh private temp dir.
+func writeConfig(cleaned string) (dir, path string, err error) {
+	dir, err = os.MkdirTemp("", "vpngate-*")
+	if err != nil {
+		return "", "", err
+	}
+	path = filepath.Join(dir, "client.ovpn")
+	if err := os.WriteFile(path, []byte(cleaned), 0o600); err != nil {
+		os.RemoveAll(dir)
+		return "", "", err
+	}
+	return dir, path, nil
+}
+
+// directCommand runs openvpn (via command, which may add sudo) on a config
+// written to a temp dir that the caller removes when the process exits.
+func directCommand(bin, cleaned string, mgmtPort int, manageDNS bool) (*exec.Cmd, string, error) {
+	dir, path, err := writeConfig(cleaned)
+	if err != nil {
+		return nil, "", err
+	}
+	return command(bin, openvpnArgs(path, mgmtPort, manageDNS)), dir, nil
+}
+
+// openvpnArgs is the fixed OpenVPN command line for a client session.
+func openvpnArgs(cfgPath string, mgmtPort int, manageDNS bool) []string {
+	args := []string{
+		"--config", cfgPath,
+		"--management", "127.0.0.1", strconv.Itoa(mgmtPort),
+		"--verb", "3",
+		"--connect-retry-max", "1",
+		"--server-poll-timeout", "10",
+		"--resolv-retry", "2",
+		"--ping", "10",
+		"--ping-exit", "45",
+		"--mute-replay-warnings",
+		"--auth-nocache",
+		// Many VPN Gate servers still negotiate CBC ciphers; allow them
+		// alongside modern AEAD ciphers so OpenVPN 2.6+ doesn't refuse.
+		"--data-ciphers", "AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC",
+	}
+	return append(args, platformArgs(manageDNS)...)
 }
 
 // WaitConnected blocks until the tunnel is up, the process dies, or ctx ends.
@@ -168,7 +191,7 @@ func (c *Conn) LastError() string {
 }
 
 // Stop terminates the process: SIGTERM via the management interface first
-// (works regardless of sudo), then a direct signal, then waits for exit.
+// (works regardless of sudo or platform), then a direct terminate, then kill.
 func (c *Conn) Stop() {
 	c.stopOnce.Do(func() {
 		c.mu.Lock()
@@ -186,9 +209,8 @@ func (c *Conn) Stop() {
 			return
 		case <-time.After(3 * time.Second):
 		}
-		// sudo relays SIGTERM to its child, so this covers both run modes.
 		if c.cmd.Process != nil {
-			_ = c.cmd.Process.Signal(syscall.SIGTERM)
+			terminate(c.cmd.Process)
 		}
 		select {
 		case <-c.done:
@@ -275,20 +297,6 @@ func freePort() (int, error) {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port, nil
-}
-
-// dnsScripts finds the distro's resolv.conf update hooks, if installed.
-func dnsScripts() (up, down string, ok bool) {
-	candidates := []string{
-		"/etc/openvpn/update-resolv-conf",
-		"/etc/openvpn/scripts/update-systemd-resolved",
-	}
-	for _, p := range candidates {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p, p, true
-		}
-	}
-	return "", "", false
 }
 
 // TCPPing measures TCP connect latency to addr; returns -1 if unreachable.
