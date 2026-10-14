@@ -2,3 +2,5 @@
 .dev-data/
 vpngate-client
 web/node_modules/
+dist/
+*.syso
