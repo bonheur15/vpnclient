@@ -32,7 +32,16 @@ type Settings struct {
 	ManageDNS         bool     `json:"manageDns"`         // hook resolv.conf update scripts if present
 	PrecheckTCP       bool     `json:"precheckTcp"`       // quick TCP reachability probe before full connect
 	MaxAutoCandidates int      `json:"maxAutoCandidates"` // cap of servers tried per auto round
+	AutoRotate        bool     `json:"autoRotate"`        // periodically switch to a fresh server while connected
+	RotateIntervalMin int      `json:"rotateIntervalMin"` // minutes between rotations (>= MinRotateIntervalMin)
 }
+
+// Rotation bounds. The floor keeps volunteer-run VPN Gate servers from being
+// hammered with reconnects; the API clamps to it so no client can go lower.
+const (
+	MinRotateIntervalMin = 60
+	MaxRotateIntervalMin = 7 * 24 * 60
+)
 
 func DefaultSettings() Settings {
 	return Settings{
@@ -45,6 +54,8 @@ func DefaultSettings() Settings {
 		ManageDNS:         true,
 		PrecheckTCP:       true,
 		MaxAutoCandidates: 30,
+		AutoRotate:        false,
+		RotateIntervalMin: 60,
 	}
 }
 
@@ -72,6 +83,7 @@ func Load(path string) (*Store, error) {
 		if s.d.Stats == nil {
 			s.d.Stats = map[string]*ServerStats{}
 		}
+		s.d.Settings = normalize(s.d.Settings)
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -153,7 +165,16 @@ func (s *Store) Settings() Settings {
 }
 
 func (s *Store) SetSettings(cfg Settings) {
-	// Clamp to sane ranges so a bad PUT can't wedge the engine.
+	cfg = normalize(cfg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.d.Settings = cfg
+	s.save()
+}
+
+// normalize clamps settings to sane ranges so a bad PUT (or a hand-edited
+// state file) can't wedge the engine.
+func normalize(cfg Settings) Settings {
 	if cfg.ConnectTimeoutSec < 10 {
 		cfg.ConnectTimeoutSec = 10
 	}
@@ -172,8 +193,11 @@ func (s *Store) SetSettings(cfg Settings) {
 	if cfg.Countries == nil {
 		cfg.Countries = []string{}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.d.Settings = cfg
-	s.save()
+	if cfg.RotateIntervalMin < MinRotateIntervalMin {
+		cfg.RotateIntervalMin = MinRotateIntervalMin
+	}
+	if cfg.RotateIntervalMin > MaxRotateIntervalMin {
+		cfg.RotateIntervalMin = MaxRotateIntervalMin
+	}
+	return cfg
 }
